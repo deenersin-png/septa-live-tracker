@@ -30,7 +30,7 @@
                 </tr>
             </thead>
             <tbody id="tableBody">
-                <!-- Live data items are inserted cleanly here -->
+                <!-- Live data items are inserted here -->
             </tbody>
         </table>
     </main>
@@ -44,69 +44,98 @@
             const tableBody = document.getElementById('tableBody');
             
             statusText.innerText = "Querying live SEPTA streams...";
-            tableBody.innerHTML = ""; // Wipe table clean
+            tableBody.innerHTML = ""; 
 
-            // Utilizes an open-source proxy tool to bridge browser CORS policies
+            // Use an alternative robust proxy to avoid strict CORS errors
             const apiEndpoint = `https://septa.org{route}`;
-            const proxyUrl = `https://corsproxy.io{encodeURIComponent(apiEndpoint)}`;
+            const proxyUrl = `https://allorigins.win{encodeURIComponent(apiEndpoint)}`;
 
             try {
                 const response = await fetch(proxyUrl);
-                if (!response.ok) throw new Error("Network latency detected.");
+                if (!response.ok) throw new Error("Proxy connection issue.");
                 
-                const data = await response.json();
+                const wrapperData = await response.json();
+                // AllOrigins wraps the actual payload inside a string text property called "contents"
+                const data = JSON.parse(wrapperData.contents);
                 
-                if (!data.bus || data.bus.length === 0) {
-                    statusText.innerText = `No live vehicles found operational on Route ${route}.`;
-                    return;
+                let rawBuses = [];
+                let usingMockData = false;
+
+                // Safely handle historical vs current SEPTA object formats
+                if (data && data.bus && Array.isArray(data.bus)) {
+                    rawBuses = data.bus;
+                } else if (Array.isArray(data)) {
+                    rawBuses = data;
                 }
 
-                /* 
-                   Simulating Leader/Follower context array from raw fleet telemetry.
-                   SEPTA feeds map real-time blocks. We transform them dynamically to replicate
-                   your Google Sheets operational model columns for active checking.
-                */
-                let busTrips = data.bus.map((b, index, arr) => {
+                // FALLBACK MOCK DATA: If it's off-hours or the API returns nothing, 
+                // load your exact matching/mismatching configuration to guarantee the visual works
+                if (rawBuses.length === 0) {
+                    usingMockData = true;
+                    rawBuses = [
+                        { VehicleID: "9101", label: "1" },
+                        { VehicleID: "9102", label: "2" },
+                        { VehicleID: "9103", label: "3" },
+                        { VehicleID: "9104", label: "4" }
+                    ];
+                }
+
+                // Transform raw data array into your leader/follower model
+                let busTrips = rawBuses.map((b, index, arr) => {
+                    let busId = b.VehicleID || b.vehicleid || `910${index + 1}`;
+                    
+                    // Default baseline sequence links
+                    let leader = index === 0 ? "" : (arr[index - 1].VehicleID || `910${index}`);
+                    let follower = index === arr.length - 1 ? "" : (arr[index + 1].VehicleID || `910${index + 2}`);
+
+                    // INJECT MOCK MISMATCHES INTENTIONALLY (For demo and testing validation rules)
+                    if (usingMockData) {
+                        if (busId === "9102") {
+                            // Break 9102's leader/follower pattern to test your rule
+                            leader = "9101"; 
+                            follower = "9101"; // Error! 9101 won't list 9102 as its follower on trip 2
+                        }
+                    }
+
                     return {
-                        route: route + " Eastbound",
-                        busId: b.VehicleID || b.VehicleId || `9${b.label || index + 101}`,
+                        route: "ROUTE " + route + "-42 Eastbound",
+                        busId: busId,
                         tripNumber: index + 1,
-                        // Simulating linking patterns to test the highlighting engine
-                        leaderBus: index === 0 ? "" : (index % 5 === 0 ? "MISMATCH_ID" : arr[index - 1].VehicleID || `9${index + 100}`),
-                        followerBus: index === arr.length - 1 ? "" : (index % 7 === 0 ? "ERR_ID" : arr[index + 1].VehicleID || `9${index + 102}`)
+                        leaderBus: leader,
+                        followerBus: follower
                     };
                 });
 
-                // Run Mismatch Logic Checks
+                // Run Mismatch Logic Validation Checks
                 busTrips.forEach((currentBus) => {
                     let isMismatch = false;
                     let failureReason = "Validated ✔";
 
-                    // Backward verification flag
+                    // 1. Backward check: Ensure designated leader lists this bus as its follower
                     if (currentBus.leaderBus !== "") {
                         const targetLeader = busTrips.find(b => b.busId === currentBus.leaderBus);
                         if (targetLeader && targetLeader.followerBus !== currentBus.busId) {
                             isMismatch = true;
-                            failureReason = "Leader Follower Contradiction";
+                            failureReason = `Leader ${currentBus.leaderBus} mismatch`;
                         } else if (!targetLeader) {
                             isMismatch = true;
-                            failureReason = "Orphaned Leader ID Reference";
+                            failureReason = "Orphaned Leader Reference";
                         }
                     }
 
-                    // Forward verification flag
+                    // 2. Forward check: Ensure designated follower lists this bus as its leader
                     if (currentBus.followerBus !== "" && !isMismatch) {
                         const targetFollower = busTrips.find(b => b.busId === currentBus.followerBus);
                         if (targetFollower && targetFollower.leaderBus !== currentBus.busId) {
                             isMismatch = true;
-                            failureReason = "Follower Leader Contradiction";
+                            failureReason = `Follower ${currentBus.followerBus} mismatch`;
                         } else if (!targetFollower) {
                             isMismatch = true;
-                            failureReason = "Orphaned Follower ID Reference";
+                            failureReason = "Orphaned Follower Reference";
                         }
                     }
 
-                    // Inject the validated rows into view
+                    // Render rows dynamically
                     const row = document.createElement('tr');
                     if (isMismatch) {
                         row.classList.add('mismatch-row');
@@ -123,15 +152,17 @@
                     tableBody.appendChild(row);
                 });
 
-                statusText.innerText = `Successfully parsed and matched ${busTrips.length} active fleet blocks.`;
+                statusText.innerHTML = usingMockData 
+                    ? `⚠️ API returned empty array. Displaying <strong>Simulated Live Sequence Mismatch Demo</strong>.`
+                    : `🟢 Live Feed Loaded. Processed ${busTrips.length} active fleet sequences.`;
 
             } catch (error) {
-                statusText.innerText = `Tracking initialization failure: ${error.message}`;
+                statusText.innerText = `Data parse failure: ${error.message}`;
                 console.error(error);
             }
         }
 
-        // Automatic run on screen startup load
+        // Execute automatically on screen start
         fetchSeptaData();
     </script>
 </body>
