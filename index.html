@@ -3,18 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SEPTA Live Bus Mismatch Tracker</title>
+    <title>SEPTA Spreadsheet Validation Engine</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <header>
-        <h1>SEPTA Sequence Validation Engine</h1>
+        <h1>SEPTA Spreadsheet Validation Engine</h1>
         <div class="controls">
-            <label for="routeSelect">Route: </label>
-            <input type="text" id="routeSelect" value="21" placeholder="e.g., 21">
-            <button id="refreshBtn">Fetch & Validate Live Feed</button>
+            <button id="refreshBtn">Sync & Validate Spreadsheet Rows</button>
         </div>
-        <p id="statusText">Ready to fetch live transit metrics...</p>
+        <p id="statusText">Ready to parse your Google Sheet data...</p>
     </header>
 
     <main>
@@ -30,112 +28,109 @@
                 </tr>
             </thead>
             <tbody id="tableBody">
-                <!-- Live data items are inserted here -->
+                <!-- Data will populate dynamically -->
             </tbody>
         </table>
     </main>
 
     <script>
-        document.getElementById('refreshBtn').addEventListener('click', fetchSeptaData);
+        // ⚠️ REPLACE THIS EXACT STRING WITH YOUR ACTUAL GOOGLE SHEETS CSV EXPORT URL 
+        const CSV_URL = "https://google.com";
 
-        async function fetchSeptaData() {
-            const route = document.getElementById('routeSelect').value.trim();
+        document.getElementById('refreshBtn').addEventListener('click', parseSpreadsheetData);
+
+        // Advanced CSV line-splitter that safely handles quotes containing inner commas
+        function splitCsvLine(text) {
+            let matches = text.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
+            if (!matches) {
+                return text.split(',').map(val => val.trim());
+            }
+            return matches.map(val => val.replace(/^"|"$/g, '').trim());
+        }
+
+        async function parseSpreadsheetData() {
             const statusText = document.getElementById('statusText');
             const tableBody = document.getElementById('tableBody');
             
-            statusText.innerText = "Querying live SEPTA streams...";
+            if (CSV_URL.includes("YOUR_PUBLISHED_CSV_URL_HERE") || CSV_URL === "") {
+                statusText.innerHTML = "❌ <strong>Configuration Error:</strong> You must paste your real Published CSV URL inside the <code>CSV_URL</code> variable on line 26 of your index.html code.";
+                return;
+            }
+
+            statusText.innerText = "Attempting secure pipeline connection to Google Sheets...";
             tableBody.innerHTML = ""; 
 
-            // Use an alternative robust proxy to avoid strict CORS errors
-            const apiEndpoint = `https://septa.org{route}`;
-            const proxyUrl = `https://allorigins.win{encodeURIComponent(apiEndpoint)}`;
-
             try {
-                const response = await fetch(proxyUrl);
-                if (!response.ok) throw new Error("Proxy connection issue.");
+                const response = await fetch(CSV_URL);
+                if (!response.ok) throw new Error(`HTTP network response failure: Status ${response.status}`);
                 
-                const wrapperData = await response.json();
-                // AllOrigins wraps the actual payload inside a string text property called "contents"
-                const data = JSON.parse(wrapperData.contents);
+                const csvText = await response.text();
                 
-                let rawBuses = [];
-                let usingMockData = false;
-
-                // Safely handle historical vs current SEPTA object formats
-                if (data && data.bus && Array.isArray(data.bus)) {
-                    rawBuses = data.bus;
-                } else if (Array.isArray(data)) {
-                    rawBuses = data;
+                // Split document into lines and filter empty rows
+                const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
+                
+                if (lines.length <= 1) {
+                    statusText.innerText = "⚠️ Connected successfully, but your spreadsheet appears to contain empty rows.";
+                    return;
                 }
 
-                // FALLBACK MOCK DATA: If it's off-hours or the API returns nothing, 
-                // load your exact matching/mismatching configuration to guarantee the visual works
-                if (rawBuses.length === 0) {
-                    usingMockData = true;
-                    rawBuses = [
-                        { VehicleID: "9101", label: "1" },
-                        { VehicleID: "9102", label: "2" },
-                        { VehicleID: "9103", label: "3" },
-                        { VehicleID: "9104", label: "4" }
-                    ];
-                }
+                let busTrips = [];
 
-                // Transform raw data array into your leader/follower model
-                let busTrips = rawBuses.map((b, index, arr) => {
-                    let busId = b.VehicleID || b.vehicleid || `910${index + 1}`;
+                // Skip header line (index 0) and parse out data
+                for (let i = 1; i < lines.length; i++) {
+                    const columns = splitCsvLine(lines[i]);
                     
-                    // Default baseline sequence links
-                    let leader = index === 0 ? "" : (arr[index - 1].VehicleID || `910${index}`);
-                    let follower = index === arr.length - 1 ? "" : (arr[index + 1].VehicleID || `910${index + 2}`);
+                    // Match minimum expected column fields layout (Route, Bus, Trip, Leader, Follower)
+                    if (columns.length < 5) continue; 
 
-                    // INJECT MOCK MISMATCHES INTENTIONALLY (For demo and testing validation rules)
-                    if (usingMockData) {
-                        if (busId === "9102") {
-                            // Break 9102's leader/follower pattern to test your rule
-                            leader = "9101"; 
-                            follower = "9101"; // Error! 9101 won't list 9102 as its follower on trip 2
-                        }
-                    }
+                    busTrips.push({
+                        route: columns[0] || "Unknown Route",
+                        busId: columns[1] || "",
+                        tripNumber: columns[2] || "",
+                        leaderBus: columns[3] || "",
+                        followerBus: columns[4] || ""
+                    });
+                }
 
-                    return {
-                        route: "ROUTE " + route + "-42 Eastbound",
-                        busId: busId,
-                        tripNumber: index + 1,
-                        leaderBus: leader,
-                        followerBus: follower
-                    };
-                });
+                if (busTrips.length === 0) {
+                    statusText.innerText = "❌ Parser Error: Row column layouts do not match expected standard structural settings.";
+                    return;
+                }
 
-                // Run Mismatch Logic Validation Checks
+                // Execute Validation Rules Mapping Array
                 busTrips.forEach((currentBus) => {
                     let isMismatch = false;
                     let failureReason = "Validated ✔";
 
-                    // 1. Backward check: Ensure designated leader lists this bus as its follower
-                    if (currentBus.leaderBus !== "") {
-                        const targetLeader = busTrips.find(b => b.busId === currentBus.leaderBus);
-                        if (targetLeader && targetLeader.followerBus !== currentBus.busId) {
+                    const cleanBusId = currentBus.busId.trim();
+                    const cleanLeader = currentBus.leaderBus.trim();
+                    const cleanFollower = currentBus.followerBus.trim();
+
+                    // 1. Leader Contradiction Check
+                    if (cleanLeader !== "" && cleanLeader.toLowerCase() !== "none") {
+                        const targetLeader = busTrips.find(b => b.busId.trim() === cleanLeader);
+                        if (targetLeader && targetLeader.followerBus.trim() !== cleanBusId) {
                             isMismatch = true;
-                            failureReason = `Leader ${currentBus.leaderBus} mismatch`;
+                            failureReason = `Leader ${cleanLeader} states follower is ${targetLeader.followerBus || 'None'}`;
                         } else if (!targetLeader) {
                             isMismatch = true;
-                            failureReason = "Orphaned Leader Reference";
+                            failureReason = `Orphaned Leader (${cleanLeader} not found active)`;
                         }
                     }
 
-                    // 2. Forward check: Ensure designated follower lists this bus as its leader
-                    if (currentBus.followerBus !== "" && !isMismatch) {
-                        const targetFollower = busTrips.find(b => b.busId === currentBus.followerBus);
-                        if (targetFollower && targetFollower.leaderBus !== currentBus.busId) {
+                    // 2. Follower Contradiction Check
+                    if (cleanFollower !== "" && cleanFollower.toLowerCase() !== "none" && !isMismatch) {
+                        const targetFollower = busTrips.find(b => b.busId.trim() === cleanFollower);
+                        if (targetFollower && targetFollower.leaderBus.trim() !== cleanBusId) {
                             isMismatch = true;
-                            failureReason = `Follower ${currentBus.followerBus} mismatch`;
+                            failureReason = `Follower ${cleanFollower} states leader is ${targetFollower.leaderBus || 'None'}`;
                         } else if (!targetFollower) {
                             isMismatch = true;
-                            failureReason = "Orphaned Follower Reference";
+                            failureReason = `Orphaned Follower (${cleanFollower} not found active)`;
                         }
                     }
 
-                    // Render rows dynamically
+                    // Build table row visibility elements
                     const row = document.createElement('tr');
                     if (isMismatch) {
                         row.classList.add('mismatch-row');
@@ -152,18 +147,16 @@
                     tableBody.appendChild(row);
                 });
 
-                statusText.innerHTML = usingMockData 
-                    ? `⚠️ API returned empty array. Displaying <strong>Simulated Live Sequence Mismatch Demo</strong>.`
-                    : `🟢 Live Feed Loaded. Processed ${busTrips.length} active fleet sequences.`;
+                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Scanned and rendered <strong>${busTrips.length} rows</strong> directly from your spreadsheet mapping structure.`;
 
             } catch (error) {
-                statusText.innerText = `Data parse failure: ${error.message}`;
-                console.error(error);
+                statusText.innerHTML = `❌ <strong>Execution Blocked:</strong> ${error.message}. Ensure your Google Sheet is fully published to the web as a public CSV file format.`;
+                console.error("Tracking Engine Error Info:", error);
             }
         }
 
-        // Execute automatically on screen start
-        fetchSeptaData();
+        // Initialize execution immediately upon landing layout build
+        parseSpreadsheetData();
     </script>
 </body>
 </html>
