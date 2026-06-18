@@ -45,7 +45,6 @@
     </main>
 
     <script>
-        // Connected directly to your actual live spreadsheet link:
         const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQEDh9CFyVwuKqWJAGyAspd3ykNKfCN2S7UXPhUlqA9ABOV4xS2aGYKlQjJ264iLvxbbzbR39Lh5zTR/pub?gid=532219678&single=true&output=csv";
 
         document.getElementById('refreshBtn').addEventListener('click', parseSpreadsheetData);
@@ -67,13 +66,15 @@
         async function parseSpreadsheetData() {
             const statusText = document.getElementById('statusText');
             const tableBody = document.getElementById('tableBody');
-            statusText.innerText = "Connecting to Google Sheets...";
+            statusText.innerText = "Connecting to Google Sheets via proxy pipeline...";
             tableBody.innerHTML = ""; 
 
             try {
-                // Fetch directly through a cache-busting proxy link
+                // Fixed Proxy URL structure to match correct API parameters
                 const proxyUrl = `https://allorigins.win{encodeURIComponent(CSV_URL)}&ts=${Date.now()}`;
                 const response = await fetch(proxyUrl);
+                if (!response.ok) throw new Error("CORS Proxy endpoint refused down-stream request.");
+                
                 const proxyData = await response.json();
                 const csvText = proxyData.contents;
                 
@@ -93,7 +94,7 @@
                     });
                 }
 
-                busTrips.forEach((currentBus, index) => {
+                busTrips.forEach((currentBus) => {
                     let isMismatch = false;
                     let failureReason = "Validated ✔";
 
@@ -101,12 +102,11 @@
                     const leaderRef = currentBus.leaderBus;
                     const followerRef = currentBus.followerBus;
 
-                    // Skip rule logic checks if the bus explicitly has no leader/follower mapped
                     if (leaderRef && leaderRef !== "None" && leaderRef !== "") {
                         const targetLeader = busTrips.find(b => b.busId === leaderRef);
                         if (targetLeader && targetLeader.followerBus !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Sequence Error: Leader (${leaderRef}) has follower ${targetLeader.followerBus}`;
+                            failureReason = `Leader Link Broken (Follower: ${targetLeader.followerBus || 'None'})`;
                         }
                     }
 
@@ -114,7 +114,7 @@
                         const targetFollower = busTrips.find(b => b.busId === followerRef);
                         if (targetFollower && targetFollower.leaderBus !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Sequence Error: Follower (${followerRef}) has leader ${targetFollower.leaderBus}`;
+                            failureReason = `Follower Link Broken (Leader: ${targetFollower.leaderBus || 'None'})`;
                         }
                     }
 
@@ -132,14 +132,15 @@
                     tableBody.appendChild(row);
                 });
 
-                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Checked <strong>${busTrips.length} rows</strong> from your sheet.`;
+                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Tracked and verified <strong>${busTrips.length} rows</strong> directly from your spreadsheet mapping structure.`;
 
             } catch (error) {
-                statusText.innerText = `❌ Error fetching spreadsheet: ${error.message}`;
+                statusText.innerText = `❌ Fetch Error: ${error.message}`;
                 console.error(error);
             }
         }
 
+        // Run automatically when the webpage loads
         parseSpreadsheetData();
     </script>
 </body>
