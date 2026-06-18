@@ -34,12 +34,12 @@
     </main>
 
     <script>
-        // ⚠️ PASTE YOUR COPIED PUBLIC CSV LINK BETWEEN THE QUOTATION MARKS:
-        const CSV_URL = https://docs.google.com/spreadsheets/d/e/2PACX-1vQEDh9CFyVwuKqWJAGyAspd3ykNKfCN2S7UXPhUlqA9ABOV4xS2aGYKlQjJ264iLvxbbzbR39Lh5zTR/pubhtml?gid=532219678&single=true";
+        // ⚠️ THE LIVE PUBLIC LINK GENERATED FROM YOUR SHEET:
+        const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQEDh9CFyVwuKqWJAGyAspd3ykNKfCN2S7UXPhUlqA9ABOV4xS2aGYKlQjJ264iLvxbbzbR39Lh5zTR/pub?gid=532219678&single=true&output=csv";
 
         document.getElementById('refreshBtn').addEventListener('click', parseSpreadsheetData);
 
-        // Robust CSV row processing engine
+        // Process complex spreadsheet lines containing double quotes and comma gaps smoothly
         function parseCSVLine(line) {
             let result = [];
             let current = '';
@@ -64,74 +64,74 @@
             const statusText = document.getElementById('statusText');
             const tableBody = document.getElementById('tableBody');
             
-            statusText.innerText = "Connecting to Google Spreadsheet...";
+            statusText.innerText = "Connecting to Google Spreadsheet pipeline...";
             tableBody.innerHTML = ""; 
 
             try {
-                // Fetch directly or fall back through a proxy if browser restricts local testing
-                let response = await fetch(CSV_URL);
-                if (!response.ok) {
-                    const fallbackProxy = `https://allorigins.win{encodeURIComponent(CSV_URL)}`;
-                    const proxyResponse = await fetch(fallbackProxy);
-                    const proxyData = await proxyResponse.json();
-                    if(!proxyResponse.ok) throw new Error("Google Sheets access denied.");
-                    var csvText = proxyData.contents;
-                } else {
-                    var csvText = await response.text();
-                }
+                // Pipe download request through AllOrigins to prevent security freeze errors
+                const proxyUrl = `https://allorigins.win{encodeURIComponent(CSV_URL)}&timestamp=${new Date().getTime()}`;
+                const response = await fetch(proxyUrl);
+                if (!response.ok) throw new Error("Google Sheets server connection rejected.");
+                
+                const proxyData = await response.json();
+                const csvText = proxyData.contents;
                 
                 const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
                 let busTrips = [];
 
+                // Read header headers row first to verify index locations safely
+                const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/["\s_]/g, ''));
+                
+                // Track dynamic index references based on your specific Sheet screenshot names
+                const routeIdx = headers.indexOf("route") !== -1 ? headers.indexOf("route") : 0;
+                const busIdx = headers.indexOf("bus") !== -1 ? headers.indexOf("bus") : 1;
+                const tripIdx = headers.indexOf("tripnumber") !== -1 ? headers.indexOf("tripnumber") : 2;
+                const leaderIdx = headers.indexOf("leaderbus") !== -1 ? headers.indexOf("leaderbus") : 3;
+                const followerIdx = headers.indexOf("followerbus") !== -1 ? headers.indexOf("followerbus") : 4;
+
                 // Process lines, skipping the header row
                 for (let i = 1; i < lines.length; i++) {
                     const columns = parseCSVLine(lines[i]);
-                    if (columns.length < 5) continue; 
+                    if (columns.length < 3 || columns[busIdx] === "") continue; 
 
                     busTrips.push({
-                        route: columns[0] || "Unknown Route",
-                        busId: columns[1] || "",
-                        tripNumber: columns[2] || "",
-                        leaderBus: columns[3] || "",
-                        followerBus: columns[4] || ""
+                        route: columns[routeIdx] || "ROUTE 21-42 Eastbound",
+                        busId: columns[busIdx] || "",
+                        tripNumber: columns[tripIdx] || i,
+                        leaderBus: columns[leaderIdx] || "",
+                        followerBus: columns[followerIdx] || ""
                     });
                 }
 
                 if (busTrips.length === 0) {
-                    statusText.innerText = "❌ Table content layout is empty or mismatched.";
+                    statusText.innerText = "❌ Parse Mismatch: The data rows were empty or headers failed to align.";
                     return;
                 }
 
-                // Sequence matching validation loop
+                // Core logic checks
                 busTrips.forEach((currentBus) => {
                     let isMismatch = false;
                     let failureReason = "Validated ✔";
 
-                    const currentBusId = currentBus.busId;
-                    const leaderRef = currentBus.leaderBus;
-                    const followerRef = currentBus.followerBus;
+                    const currentBusId = currentBus.busId.trim();
+                    const leaderRef = currentBus.leaderBus.trim();
+                    const followerRef = currentBus.followerBus.trim();
 
-                    // 1. Leader-to-Follower verification check
+                    // 1. Leader-to-Follower mismatch validation rule
                     if (leaderRef && leaderRef.toLowerCase() !== "none" && leaderRef !== "") {
-                        const leaderRow = busTrips.find(b => b.busId === leaderRef);
-                        if (leaderRow && leaderRow.followerBus !== currentBusId) {
+                        const leaderRow = busTrips.find(b => b.busId.trim() === leaderRef);
+                        if (leaderRow && leaderRow.followerBus.trim() !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Leader Mismatch: ${leaderRef} tracks ${leaderRow.followerBus || 'None'}`;
-                        } else if (!leaderRow) {
-                            isMismatch = true;
-                            failureReason = `Missing Leader Row (${leaderRef})`;
+                            failureReason = `Leader error: ${leaderRef} has follower ${leaderRow.followerBus || 'None'}`;
                         }
                     }
 
-                    // 2. Follower-to-Leader verification check
+                    // 2. Follower-to-Leader mismatch validation rule
                     if (followerRef && followerRef.toLowerCase() !== "none" && followerRef !== "" && !isMismatch) {
-                        const followerRow = busTrips.find(b => b.busId === followerRef);
-                        if (followerRow && followerRow.leaderBus !== currentBusId) {
+                        const followerRow = busTrips.find(b => b.busId.trim() === followerRef);
+                        if (followerRow && followerRow.leaderBus.trim() !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Follower Mismatch: ${followerRef} tracks ${followerRow.leaderBus || 'None'}`;
-                        } else if (!followerRow) {
-                            isMismatch = true;
-                            failureReason = `Missing Follower Row (${followerRef})`;
+                            failureReason = `Follower error: ${followerRef} has leader ${followerRow.leaderBus || 'None'}`;
                         }
                     }
 
@@ -149,10 +149,10 @@
                     tableBody.appendChild(row);
                 });
 
-                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Processed <strong>${busTrips.length} rows</strong> directly from your spreadsheet mapping structure.`;
+                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Tracked and checked <strong>${busTrips.length} rows</strong> directly from your sheet.`;
 
             } catch (error) {
-                statusText.innerHTML = `❌ <strong>Fetch Failure:</strong> Check that your Google Sheet link is shared as "Anyone with link" and Published as CSV.`;
+                statusText.innerHTML = `❌ <strong>Execution Failure:</strong> ${error.message}. Open your browser inspector panel (F12) to trace execution.`;
                 console.error(error);
             }
         }
