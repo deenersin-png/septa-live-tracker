@@ -28,59 +28,64 @@
                 </tr>
             </thead>
             <tbody id="tableBody">
-                <!-- Data will populate dynamically -->
+                <!-- Rows load here -->
             </tbody>
         </table>
     </main>
 
     <script>
-        // ⚠️ REPLACE THIS EXACT STRING WITH YOUR ACTUAL GOOGLE SHEETS CSV EXPORT URL 
+        // ⚠️ PASTE YOUR COPIED PUBLIC CSV LINK BETWEEN THE QUOTATION MARKS:
         const CSV_URL = "https://google.com";
 
         document.getElementById('refreshBtn').addEventListener('click', parseSpreadsheetData);
 
-        // Advanced CSV line-splitter that safely handles quotes containing inner commas
-        function splitCsvLine(text) {
-            let matches = text.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
-            if (!matches) {
-                return text.split(',').map(val => val.trim());
+        // Robust CSV row processing engine
+        function parseCSVLine(line) {
+            let result = [];
+            let current = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < line.length; i++) {
+                let char = line[i];
+                if (char === '"') {
+                    inQuotes = !inQuotes;
+                } else if (char === ',' && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
             }
-            return matches.map(val => val.replace(/^"|"$/g, '').trim());
+            result.push(current.trim());
+            return result;
         }
 
         async function parseSpreadsheetData() {
             const statusText = document.getElementById('statusText');
             const tableBody = document.getElementById('tableBody');
             
-            if (CSV_URL.includes("YOUR_PUBLISHED_CSV_URL_HERE") || CSV_URL === "") {
-                statusText.innerHTML = "❌ <strong>Configuration Error:</strong> You must paste your real Published CSV URL inside the <code>CSV_URL</code> variable on line 26 of your index.html code.";
-                return;
-            }
-
-            statusText.innerText = "Attempting secure pipeline connection to Google Sheets...";
+            statusText.innerText = "Connecting to Google Spreadsheet...";
             tableBody.innerHTML = ""; 
 
             try {
-                const response = await fetch(CSV_URL);
-                if (!response.ok) throw new Error(`HTTP network response failure: Status ${response.status}`);
-                
-                const csvText = await response.text();
-                
-                // Split document into lines and filter empty rows
-                const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
-                
-                if (lines.length <= 1) {
-                    statusText.innerText = "⚠️ Connected successfully, but your spreadsheet appears to contain empty rows.";
-                    return;
+                // Fetch directly or fall back through a proxy if browser restricts local testing
+                let response = await fetch(CSV_URL);
+                if (!response.ok) {
+                    const fallbackProxy = `https://allorigins.win{encodeURIComponent(CSV_URL)}`;
+                    const proxyResponse = await fetch(fallbackProxy);
+                    const proxyData = await proxyResponse.json();
+                    if(!proxyResponse.ok) throw new Error("Google Sheets access denied.");
+                    var csvText = proxyData.contents;
+                } else {
+                    var csvText = await response.text();
                 }
-
+                
+                const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
                 let busTrips = [];
 
-                // Skip header line (index 0) and parse out data
+                // Process lines, skipping the header row
                 for (let i = 1; i < lines.length; i++) {
-                    const columns = splitCsvLine(lines[i]);
-                    
-                    // Match minimum expected column fields layout (Route, Bus, Trip, Leader, Follower)
+                    const columns = parseCSVLine(lines[i]);
                     if (columns.length < 5) continue; 
 
                     busTrips.push({
@@ -93,48 +98,45 @@
                 }
 
                 if (busTrips.length === 0) {
-                    statusText.innerText = "❌ Parser Error: Row column layouts do not match expected standard structural settings.";
+                    statusText.innerText = "❌ Table content layout is empty or mismatched.";
                     return;
                 }
 
-                // Execute Validation Rules Mapping Array
+                // Sequence matching validation loop
                 busTrips.forEach((currentBus) => {
                     let isMismatch = false;
                     let failureReason = "Validated ✔";
 
-                    const cleanBusId = currentBus.busId.trim();
-                    const cleanLeader = currentBus.leaderBus.trim();
-                    const cleanFollower = currentBus.followerBus.trim();
+                    const currentBusId = currentBus.busId;
+                    const leaderRef = currentBus.leaderBus;
+                    const followerRef = currentBus.followerBus;
 
-                    // 1. Leader Contradiction Check
-                    if (cleanLeader !== "" && cleanLeader.toLowerCase() !== "none") {
-                        const targetLeader = busTrips.find(b => b.busId.trim() === cleanLeader);
-                        if (targetLeader && targetLeader.followerBus.trim() !== cleanBusId) {
+                    // 1. Leader-to-Follower verification check
+                    if (leaderRef && leaderRef.toLowerCase() !== "none" && leaderRef !== "") {
+                        const leaderRow = busTrips.find(b => b.busId === leaderRef);
+                        if (leaderRow && leaderRow.followerBus !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Leader ${cleanLeader} states follower is ${targetLeader.followerBus || 'None'}`;
-                        } else if (!targetLeader) {
+                            failureReason = `Leader Mismatch: ${leaderRef} tracks ${leaderRow.followerBus || 'None'}`;
+                        } else if (!leaderRow) {
                             isMismatch = true;
-                            failureReason = `Orphaned Leader (${cleanLeader} not found active)`;
+                            failureReason = `Missing Leader Row (${leaderRef})`;
                         }
                     }
 
-                    // 2. Follower Contradiction Check
-                    if (cleanFollower !== "" && cleanFollower.toLowerCase() !== "none" && !isMismatch) {
-                        const targetFollower = busTrips.find(b => b.busId.trim() === cleanFollower);
-                        if (targetFollower && targetFollower.leaderBus.trim() !== cleanBusId) {
+                    // 2. Follower-to-Leader verification check
+                    if (followerRef && followerRef.toLowerCase() !== "none" && followerRef !== "" && !isMismatch) {
+                        const followerRow = busTrips.find(b => b.busId === followerRef);
+                        if (followerRow && followerRow.leaderBus !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Follower ${cleanFollower} states leader is ${targetFollower.leaderBus || 'None'}`;
-                        } else if (!targetFollower) {
+                            failureReason = `Follower Mismatch: ${followerRef} tracks ${followerRow.leaderBus || 'None'}`;
+                        } else if (!followerRow) {
                             isMismatch = true;
-                            failureReason = `Orphaned Follower (${cleanFollower} not found active)`;
+                            failureReason = `Missing Follower Row (${followerRef})`;
                         }
                     }
 
-                    // Build table row visibility elements
                     const row = document.createElement('tr');
-                    if (isMismatch) {
-                        row.classList.add('mismatch-row');
-                    }
+                    if (isMismatch) row.classList.add('mismatch-row');
 
                     row.innerHTML = `
                         <td>${currentBus.route}</td>
@@ -147,15 +149,14 @@
                     tableBody.appendChild(row);
                 });
 
-                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Scanned and rendered <strong>${busTrips.length} rows</strong> directly from your spreadsheet mapping structure.`;
+                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Processed <strong>${busTrips.length} rows</strong> directly from your spreadsheet mapping structure.`;
 
             } catch (error) {
-                statusText.innerHTML = `❌ <strong>Execution Blocked:</strong> ${error.message}. Ensure your Google Sheet is fully published to the web as a public CSV file format.`;
-                console.error("Tracking Engine Error Info:", error);
+                statusText.innerHTML = `❌ <strong>Fetch Failure:</strong> Check that your Google Sheet link is shared as "Anyone with link" and Published as CSV.`;
+                console.error(error);
             }
         }
 
-        // Initialize execution immediately upon landing layout build
         parseSpreadsheetData();
     </script>
 </body>
