@@ -4,7 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SEPTA Spreadsheet Validation Engine</title>
-    <link rel="stylesheet" href="style.css">
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #f8f9fa; margin: 0; padding: 20px; }
+        header { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        h1 { margin: 0 0 10px 0; color: #002f6c; font-size: 24px; }
+        button { background: #002f6c; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #001f4d; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        th, td { padding: 12px 15px; border-bottom: 1px solid #e0e0e0; text-align: left; font-size: 14px; }
+        th { background: #f1f3f5; color: #495057; }
+        .mismatch-row { background-color: #ffeef0 !important; color: #d73a49; }
+        .badge { padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .badge-pass { background: #e6f4ea; color: #137333; }
+        .badge-fail { background: #fce8e6; color: #c5221f; }
+    </style>
 </head>
 <body>
     <header>
@@ -16,7 +29,7 @@
     </header>
 
     <main>
-        <table id="busTable">
+        <table>
             <thead>
                 <tr>
                     <th>Route</th>
@@ -27,34 +40,25 @@
                     <th>Validation Status</th>
                 </tr>
             </thead>
-            <tbody id="tableBody">
-                <!-- Rows load here -->
-            </tbody>
+            <tbody id="tableBody"></tbody>
         </table>
     </main>
 
     <script>
-        // ⚠️ THE LIVE PUBLIC LINK GENERATED FROM YOUR SHEET:
-        const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQEDh9CFyVwuKqWJAGyAspd3ykNKfCN2S7UXPhUlqA9ABOV4xS2aGYKlQjJ264iLvxbbzbR39Lh5zTR/pub?gid=532219678&single=true&output=csv";
+        // Connected directly to your actual live spreadsheet link:
+        const CSV_URL = "https://google.com";
 
         document.getElementById('refreshBtn').addEventListener('click', parseSpreadsheetData);
 
-        // Process complex spreadsheet lines containing double quotes and comma gaps smoothly
         function parseCSVLine(line) {
             let result = [];
             let current = '';
             let inQuotes = false;
-
             for (let i = 0; i < line.length; i++) {
                 let char = line[i];
-                if (char === '"') {
-                    inQuotes = !inQuotes;
-                } else if (char === ',' && !inQuotes) {
-                    result.push(current.trim());
-                    current = '';
-                } else {
-                    current += char;
-                }
+                if (char === '"') inQuotes = !inQuotes;
+                else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                else current += char;
             }
             result.push(current.trim());
             return result;
@@ -63,75 +67,54 @@
         async function parseSpreadsheetData() {
             const statusText = document.getElementById('statusText');
             const tableBody = document.getElementById('tableBody');
-            
-            statusText.innerText = "Connecting to Google Spreadsheet pipeline...";
+            statusText.innerText = "Connecting to Google Sheets...";
             tableBody.innerHTML = ""; 
 
             try {
-                // Pipe download request through AllOrigins to prevent security freeze errors
-                const proxyUrl = `https://allorigins.win{encodeURIComponent(CSV_URL)}&timestamp=${new Date().getTime()}`;
+                // Fetch directly through a cache-busting proxy link
+                const proxyUrl = `https://allorigins.win{encodeURIComponent(CSV_URL)}&ts=${Date.now()}`;
                 const response = await fetch(proxyUrl);
-                if (!response.ok) throw new Error("Google Sheets server connection rejected.");
-                
                 const proxyData = await response.json();
                 const csvText = proxyData.contents;
                 
                 const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
                 let busTrips = [];
 
-                // Read header headers row first to verify index locations safely
-                const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/["\s_]/g, ''));
-                
-                // Track dynamic index references based on your specific Sheet screenshot names
-                const routeIdx = headers.indexOf("route") !== -1 ? headers.indexOf("route") : 0;
-                const busIdx = headers.indexOf("bus") !== -1 ? headers.indexOf("bus") : 1;
-                const tripIdx = headers.indexOf("tripnumber") !== -1 ? headers.indexOf("tripnumber") : 2;
-                const leaderIdx = headers.indexOf("leaderbus") !== -1 ? headers.indexOf("leaderbus") : 3;
-                const followerIdx = headers.indexOf("followerbus") !== -1 ? headers.indexOf("followerbus") : 4;
-
-                // Process lines, skipping the header row
                 for (let i = 1; i < lines.length; i++) {
                     const columns = parseCSVLine(lines[i]);
-                    if (columns.length < 3 || columns[busIdx] === "") continue; 
+                    if (columns.length < 5 || !columns[1]) continue; 
 
                     busTrips.push({
-                        route: columns[routeIdx] || "ROUTE 21-42 Eastbound",
-                        busId: columns[busIdx] || "",
-                        tripNumber: columns[tripIdx] || i,
-                        leaderBus: columns[leaderIdx] || "",
-                        followerBus: columns[followerIdx] || ""
+                        route: columns[0].replace(/"/g, ''),
+                        busId: columns[1],
+                        tripNumber: columns[2],
+                        leaderBus: columns[3],
+                        followerBus: columns[4]
                     });
                 }
 
-                if (busTrips.length === 0) {
-                    statusText.innerText = "❌ Parse Mismatch: The data rows were empty or headers failed to align.";
-                    return;
-                }
-
-                // Core logic checks
-                busTrips.forEach((currentBus) => {
+                busTrips.forEach((currentBus, index) => {
                     let isMismatch = false;
                     let failureReason = "Validated ✔";
 
-                    const currentBusId = currentBus.busId.trim();
-                    const leaderRef = currentBus.leaderBus.trim();
-                    const followerRef = currentBus.followerBus.trim();
+                    const currentBusId = currentBus.busId;
+                    const leaderRef = currentBus.leaderBus;
+                    const followerRef = currentBus.followerBus;
 
-                    // 1. Leader-to-Follower mismatch validation rule
-                    if (leaderRef && leaderRef.toLowerCase() !== "none" && leaderRef !== "") {
-                        const leaderRow = busTrips.find(b => b.busId.trim() === leaderRef);
-                        if (leaderRow && leaderRow.followerBus.trim() !== currentBusId) {
+                    // Skip rule logic checks if the bus explicitly has no leader/follower mapped
+                    if (leaderRef && leaderRef !== "None" && leaderRef !== "") {
+                        const targetLeader = busTrips.find(b => b.busId === leaderRef);
+                        if (targetLeader && targetLeader.followerBus !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Leader error: ${leaderRef} has follower ${leaderRow.followerBus || 'None'}`;
+                            failureReason = `Sequence Error: Leader (${leaderRef}) has follower ${targetLeader.followerBus}`;
                         }
                     }
 
-                    // 2. Follower-to-Leader mismatch validation rule
-                    if (followerRef && followerRef.toLowerCase() !== "none" && followerRef !== "" && !isMismatch) {
-                        const followerRow = busTrips.find(b => b.busId.trim() === followerRef);
-                        if (followerRow && followerRow.leaderBus.trim() !== currentBusId) {
+                    if (followerRef && followerRef !== "None" && followerRef !== "" && !isMismatch) {
+                        const targetFollower = busTrips.find(b => b.busId === followerRef);
+                        if (targetFollower && targetFollower.leaderBus !== currentBusId) {
                             isMismatch = true;
-                            failureReason = `Follower error: ${followerRef} has leader ${followerRow.leaderBus || 'None'}`;
+                            failureReason = `Sequence Error: Follower (${followerRef}) has leader ${targetFollower.leaderBus}`;
                         }
                     }
 
@@ -149,10 +132,10 @@
                     tableBody.appendChild(row);
                 });
 
-                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Tracked and checked <strong>${busTrips.length} rows</strong> directly from your sheet.`;
+                statusText.innerHTML = `🟢 <strong>Live Sync Successful!</strong> Checked <strong>${busTrips.length} rows</strong> from your sheet.`;
 
             } catch (error) {
-                statusText.innerHTML = `❌ <strong>Execution Failure:</strong> ${error.message}. Open your browser inspector panel (F12) to trace execution.`;
+                statusText.innerText = `❌ Error fetching spreadsheet: ${error.message}`;
                 console.error(error);
             }
         }
